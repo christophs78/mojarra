@@ -207,7 +207,7 @@ public class ResourceImpl extends Resource implements Externalizable {
             if (FacesContext.getCurrentInstance().isProjectStage(Development)) {
                 responseHeaders.put("Cache-Control", "no-cache");
             } else {
-                responseHeaders.put("Cache-Control", "max-age=" + maxAge);
+                responseHeaders.put("Cache-Control", "max-age=" + (maxAge/1000));
             }
 
             URL url = getURL();
