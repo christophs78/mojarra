@@ -72,7 +72,7 @@ public class ResourceImpl extends Resource implements Externalizable {
 
     /* HTTP Date format required by the HTTP/1.1 RFC */
     private static final String RFC1123_DATE_PATTERN =
-          "EEE, dd MMM yyyy HH:mm:ss zzz";
+            "EEE, dd MMM yyyy HH:mm:ss zzz";
 
     private static final String IF_MODIFIED_SINCE = "If-Modified-Since";
 
@@ -88,7 +88,7 @@ public class ResourceImpl extends Resource implements Externalizable {
      */
     private transient Map<String,String> responseHeaders;
 
-    
+
     /**
      * Time when this application was started.  This is used to generate
      * expiration headers.
@@ -100,6 +100,12 @@ public class ResourceImpl extends Resource implements Externalizable {
      * Lifespan of this resource for caching purposes.
      */
     private long maxAge;
+
+    /**
+     * The URL of this {@link ResourceImpl} object is valid exactly as long as this {@link ResourceImpl} object itself is valid.
+     * Therefore, resolve the URL only once and re-use the already resolved URL value for subsequent calls to {@link ResourceImpl#getURL()}.
+     */
+    private URL resolvedUrl = null;
 
 
     // ------------------------------------------------------------ Constructors
@@ -120,8 +126,8 @@ public class ResourceImpl extends Resource implements Externalizable {
         this.resourceInfo = resourceInfo;
         super.setResourceName(resourceInfo.getName());
         super.setLibraryName(resourceInfo.getLibraryInfo() != null
-                             ? resourceInfo.getLibraryInfo().getName()
-                             : null);
+                ? resourceInfo.getLibraryInfo().getName()
+                : null);
         super.setContentType(contentType);
         this.initialTime = initialTime;
         this.maxAge = maxAge;
@@ -156,7 +162,7 @@ public class ResourceImpl extends Resource implements Externalizable {
      */
     @Override
     public InputStream getInputStream() throws IOException {
-		initResourceInfo();
+        initResourceInfo();
         return resourceInfo.getHelper().getInputStream(resourceInfo, FacesContext.getCurrentInstance());
     }
 
@@ -165,7 +171,17 @@ public class ResourceImpl extends Resource implements Externalizable {
      */
     @Override
     public URL getURL() {
-        return resourceInfo.getHelper().getURL(resourceInfo, FacesContext.getCurrentInstance());
+        if (resolvedUrl != null) {
+            // fast path - re-use the already resolved url
+            return resolvedUrl;
+        }
+
+        URL url = resourceInfo.getHelper().getURL(resourceInfo, FacesContext.getCurrentInstance());
+
+        // remember this url for subsequent calls to this method
+        resolvedUrl = url;
+
+        return url;
     }
 
     /**
@@ -177,7 +193,7 @@ public class ResourceImpl extends Resource implements Externalizable {
      * an empty Map will be returned and the values added are effectively thrown
      * away.
      * </p>
-     * 
+     *
      * @see javax.faces.application.Resource#getResponseHeaders()
      */
     @Override
@@ -194,7 +210,7 @@ public class ResourceImpl extends Resource implements Externalizable {
             } else {
                 expiresTime = new Date().getTime() + maxAge;
             }
-            
+
             SimpleDateFormat format = new SimpleDateFormat(RFC1123_DATE_PATTERN, US);
             format.setTimeZone(GMT);
             responseHeaders.put("Expires", format.format(new Date(expiresTime)));
@@ -214,12 +230,12 @@ public class ResourceImpl extends Resource implements Externalizable {
                 responseHeaders.put("Last-Modified", format.format(new Date(lastModified)));
                 if (lastModified != 0 && contentLength != -1) {
                     responseHeaders.put("ETag", "W/\""
-                                    + contentLength
-                                    + '-'
-                                    + lastModified
-                                    + '"');
+                            + contentLength
+                            + '-'
+                            + lastModified
+                            + '"');
                 }
-            } catch (IOException ioe) { 
+            } catch (IOException ioe) {
                 if (LOGGER.isLoggable(FINEST)) {
                     LOGGER.log(FINEST, "Closing stream", ioe);
                 }
@@ -227,7 +243,7 @@ public class ResourceImpl extends Resource implements Externalizable {
                 if (in != null) {
                     try {
                         in.close();
-                    } catch (IOException ioe) { 
+                    } catch (IOException ioe) {
                         if (LOGGER.isLoggable(FINEST)) {
                             LOGGER.log(FINEST, "Closing stream", ioe);
                         }
@@ -246,12 +262,12 @@ public class ResourceImpl extends Resource implements Externalizable {
     @Override
     public String getRequestPath() {
 
-        
+
         FacesContext context = FacesContext.getCurrentInstance();
         String facesServletMapping = getFacesMapping(context);
-        
+
         String uri = null;
-        
+
         // Check for exact mapping first
         if (isExactMapped(facesServletMapping)) {
             String resource = RESOURCE_IDENTIFIER + '/' + getResourceName();
@@ -262,21 +278,21 @@ public class ResourceImpl extends Resource implements Externalizable {
                 // No exact mapping for the requested resource, see if Facelets servlet is mapped to 
                 // e.g. /faces/* or *.xhtml and take that mapping
                 String mapping = getFirstWildCardMappingToFacesServlet(context.getExternalContext());
-                
+
                 if (mapping == null) {
-                    
+
                     // If there are only exact mappings and the resource is not exact mapped,
                     // we can't serve this resource
-                    
+
                     throw new IllegalStateException(
-                        "No suitable mapping for FacesServlet found. To serve resources " +
-                        "FacesServlet should have at least one prefix or suffix mapping."
+                            "No suitable mapping for FacesServlet found. To serve resources " +
+                                    "FacesServlet should have at least one prefix or suffix mapping."
                     );
                 }
                 facesServletMapping = mapping.replace("*", "");
             }
-        } 
-        
+        }
+
         if (uri == null) {
             // If it is extension mapped
             if (isPrefixMapped(facesServletMapping)) {
@@ -285,13 +301,13 @@ public class ResourceImpl extends Resource implements Externalizable {
                 uri = RESOURCE_IDENTIFIER + '/' + getResourceName() + facesServletMapping;
             }
         }
-        
+
         boolean queryStarted = false;
         if (getLibraryName() != null) {
             queryStarted = true;
             uri += "?ln=" + getLibraryName();
         }
-        
+
         String version = "";
         initResourceInfo();
         if (resourceInfo.getLibraryInfo() != null && resourceInfo.getLibraryInfo().getVersion() != null) {
@@ -300,24 +316,24 @@ public class ResourceImpl extends Resource implements Externalizable {
         if (resourceInfo.getVersion() != null) {
             version += resourceInfo.getVersion().toString();
         }
-        
+
         if (version.length() > 0) {
             uri += ((queryStarted) ? "&v=" : "?v=") + version;
             queryStarted = true;
         }
-        
+
         String localePrefix = resourceInfo.getLocalePrefix();
         if (localePrefix != null) {
             uri += ((queryStarted) ? "&loc=" : "?loc=") + localePrefix;
             queryStarted = true;
         }
-        
+
         String contract = resourceInfo.getContract();
         if (contract != null) {
             uri += ((queryStarted) ? "&con=" : "?con=") + contract;
             queryStarted = true;
         }
-        
+
         if (JSF_SCRIPT_RESOURCE_NAME.equals(getResourceName()) && JSF_SCRIPT_LIBRARY_NAME.equals(getLibraryName())) {
             ProjectStage stage = context.getApplication().getProjectStage();
             switch (stage) {
@@ -336,7 +352,7 @@ public class ResourceImpl extends Resource implements Externalizable {
         }
 
         uri = context.getApplication().getViewHandler()
-                     .getResourceURL(context, uri);
+                .getResourceURL(context, uri);
 
         return uri;
     }
@@ -347,11 +363,11 @@ public class ResourceImpl extends Resource implements Externalizable {
      */
     @Override
     public boolean userAgentNeedsUpdate(FacesContext context) {
-        
+
         // PENDING(edburns): this is a sub-optimal implementation choice
         // done in the interest of prototyping.  It's never a good idea 
         // to do a switch statement based on the type of an object.
-        
+
         if (resourceInfo instanceof FaceletResourceInfo) {
             return true;
         }
@@ -368,13 +384,13 @@ public class ResourceImpl extends Resource implements Externalizable {
         // invalid.
 
         Map<String,String> requestHeaders =
-              context.getExternalContext().getRequestHeaderMap();
+                context.getExternalContext().getRequestHeaderMap();
 
         if (requestHeaders.containsKey(IF_MODIFIED_SINCE)) {
             initResourceInfo();
             /*
              * Make sure that we strip the milliseconds out of what comes back
-             * from the getLastModified call for a resource as the 
+             * from the getLastModified call for a resource as the
              * 'If-Modified-Since' header does not use milliseconds.
              */
             long lastModifiedOfResource = (((ClientResourceInfo)resourceInfo).getLastModified(context) / 1000) * 1000;
@@ -409,17 +425,17 @@ public class ResourceImpl extends Resource implements Externalizable {
             return ((HttpServletRequest) request).getDateHeader(IF_MODIFIED_SINCE);
         } else {
             SimpleDateFormat format =
-                  new SimpleDateFormat(RFC1123_DATE_PATTERN, Locale.US);
+                    new SimpleDateFormat(RFC1123_DATE_PATTERN, Locale.US);
             try {
                 Date ifModifiedSinceDate = format.parse(extcontext.getRequestHeaderMap().get(IF_MODIFIED_SINCE));
                 return ifModifiedSinceDate.getTime();
             } catch (ParseException ex) {
                 if (LOGGER.isLoggable(Level.WARNING)) {
                     LOGGER.log(Level.WARNING,
-                               "jsf.application.resource.invalid_if_modified_since_header",
-                               new Object[]{
-                                     extcontext.getRequestHeaderMap().get(IF_MODIFIED_SINCE)
-                               });
+                            "jsf.application.resource.invalid_if_modified_since_header",
+                            new Object[]{
+                                    extcontext.getRequestHeaderMap().get(IF_MODIFIED_SINCE)
+                            });
                     if (ex != null) {
                         LOGGER.log(Level.WARNING, "", ex);
                     }
@@ -466,7 +482,7 @@ public class ResourceImpl extends Resource implements Externalizable {
                 getContentType(),
                 FacesContext.getCurrentInstance());
     }
-	
+
     // --------------------------------------------------------- Private Methods
 
 
