@@ -32,6 +32,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -70,11 +72,36 @@ import com.sun.faces.util.MessageUtils;
 public class ELUtils {
 
     /**
+     * Private cache for storing evaluation results for composite components checks.
+     */
+    private static final HashMap<String, Boolean> compositeComponentEvaluationCache = new HashMap<String, Boolean>();
+
+    /**
+     * The maximum size of the <code>compositeComponentEvaluationCache</code>.
+     */
+    private static final int compositeComponentEvaluationCacheMaxSize = 1000;
+
+    /**
+     * FIFO queue, holding access information about the <code>compositeComponentEvaluationCache</code>.
+     */
+    private static final LinkedList<String> evaluationCacheFifoQueue = new LinkedList<String>();
+
+    /**
+     * Class member, indicating a <I>positive</I> evaluation result.
+     */
+    private static final Boolean IS_COMPOSITE_COMPONENT = Boolean.TRUE;
+
+    /**
+     * Class member, indicating a <I>negative</I> evaluation result.
+     */
+    private static final Boolean IS_NOT_A_COMPOSITE_COMPONENT = Boolean.FALSE;
+
+    /**
      * Helps to determine if a EL expression represents a composite component
      * EL expression.
      */
     private static final Pattern COMPOSITE_COMPONENT_EXPRESSION =
-          Pattern.compile(".(?:[ ]+|[\\[{,(])cc[.].+[}]");
+            Pattern.compile(".(?:[ ]+|[\\[{,(])cc[.].+[}]");
 
     /**
      * Used to determine if EL method arguments are being passed to a
@@ -91,7 +118,7 @@ public class ELUtils {
      * is legal.
      */
     private static final Pattern COMPOSITE_COMPONENT_LOOKUP_WITH_ARGS =
-          Pattern.compile("(?:[ ]+|[\\[{,(])cc[.]attrs[.]\\w+[(].+[)]");
+            Pattern.compile("(?:[ ]+|[\\[{,(])cc[.]attrs[.]\\w+[(].+[)]");
 
 
     /**
@@ -99,7 +126,7 @@ public class ELUtils {
      * MethodExpression is a simple lookup (i.e. #{cc.attrs.myaction}).
      */
     private static final Pattern METHOD_EXPRESSION_LOOKUP =
-          Pattern.compile(".[{]cc[.]attrs[.]\\w+[}]");
+            Pattern.compile(".[{]cc[.]attrs[.]\\w+[}]");
 
     private static final String APPLICATION_SCOPE = "applicationScope";
     private static final String SESSION_SCOPE = "sessionScope";
@@ -138,35 +165,35 @@ public class ELUtils {
     public static final BeanELResolver BEAN_RESOLVER = new BeanELResolver();
 
     public static final FacesResourceBundleELResolver FACES_BUNDLE_RESOLVER =
-        new FacesResourceBundleELResolver();
+            new FacesResourceBundleELResolver();
 
     public static final ImplicitObjectELResolverForJsp IMPLICIT_JSP_RESOLVER =
-        new ImplicitObjectELResolverForJsp();
+            new ImplicitObjectELResolverForJsp();
 
     public static final ImplicitObjectELResolver IMPLICIT_RESOLVER =
-        new ImplicitObjectELResolver();
-    
-    public static final FlashELResolver FLASH_RESOLVER = 
-        new FlashELResolver();
+            new ImplicitObjectELResolver();
+
+    public static final FlashELResolver FLASH_RESOLVER =
+            new FlashELResolver();
 
     public static final ListELResolver LIST_RESOLVER = new ListELResolver();
 
     public static final ManagedBeanELResolver MANAGED_BEAN_RESOLVER =
-        new ManagedBeanELResolver();
+            new ManagedBeanELResolver();
 
     public static final MapELResolver MAP_RESOLVER = new MapELResolver();
 
     public static final ResourceBundleELResolver BUNDLE_RESOLVER =
-        new ResourceBundleELResolver();
+            new ResourceBundleELResolver();
 
     public static final ScopedAttributeELResolver SCOPED_RESOLVER =
-        new ScopedAttributeELResolver();
+            new ScopedAttributeELResolver();
 
     public static final ResourceELResolver RESOURCE_RESOLVER =
-          new ResourceELResolver();
+            new ResourceELResolver();
 
     public static final CompositeComponentAttributesELResolver COMPOSITE_COMPONENT_ATTRIBUTES_EL_RESOLVER =
-          new CompositeComponentAttributesELResolver();
+            new CompositeComponentAttributesELResolver();
 
 
 
@@ -182,11 +209,23 @@ public class ELUtils {
 
 
     public static boolean isCompositeComponentExpr(String expression) {
+        Boolean evaluationResult = compositeComponentEvaluationCache.get(expression);
+
+        if (evaluationResult != null) {
+            // fast path - this expression has already been evaluated, therefore return its evaluation result
+            return evaluationResult.booleanValue();
+        }
+
         // TODO we should be trying to re-use the Matcher by calling
         // m.reset(expression);
-        return COMPOSITE_COMPONENT_EXPRESSION
+        boolean returnValue = COMPOSITE_COMPONENT_EXPRESSION
                 .matcher(expression)
                 .find();
+
+        // remember the evaluation result for this expression
+        rememberEvaluationResult(expression, returnValue);
+
+        return returnValue;
     }
 
 
@@ -207,20 +246,20 @@ public class ELUtils {
 
     /**
      * <p>Create the <code>ELResolver</code> chain for programmatic EL calls.</p>
-     * 
+     *
      * @param composite a <code>CompositeELResolver</code>
      * @param associate our ApplicationAssociate
      */
     public static void buildFacesResolver(FacesCompositeELResolver composite, ApplicationAssociate associate) {
 
         checkNotNull(composite, associate);
-        
+
         if (!tryAddCDIELResolver(composite)) {
-            // The CDI ELResolver that among others takes care of handling the implicit objects 
+            // The CDI ELResolver that among others takes care of handling the implicit objects
             // was not added. Add the old native implicit resolver.
-            composite.addRootELResolver(IMPLICIT_RESOLVER); 
+            composite.addRootELResolver(IMPLICIT_RESOLVER);
         }
-        
+
         composite.add(FLASH_RESOLVER);
         composite.addPropertyELResolver(COMPOSITE_COMPONENT_ATTRIBUTES_EL_RESOLVER);
         addELResolvers(composite, associate.getELResolversFromFacesConfig());
@@ -238,23 +277,23 @@ public class ELUtils {
         composite.addPropertyELResolver(BEAN_RESOLVER);
         composite.addRootELResolver(SCOPED_RESOLVER);
     }
-    
+
     /**
      * <p>Create the <code>ELResolver</code> chain for JSP.</p>
-     * 
+     *
      * @param composite a <code>CompositeELResolver</code>
      * @param associate our ApplicationAssociate
      */
     public static void buildJSPResolver(FacesCompositeELResolver composite, ApplicationAssociate associate) {
 
         checkNotNull(composite, associate);
-        
+
         if (!tryAddCDIELResolver(composite)) {
-            // The CDI ELResolver that among others takes care of handling the implicit objects 
+            // The CDI ELResolver that among others takes care of handling the implicit objects
             // was not added. Add the old native implicit JSP resolver.
             composite.addRootELResolver(IMPLICIT_JSP_RESOLVER);
         }
-        
+
         composite.add(FLASH_RESOLVER);
         composite.addRootELResolver(MANAGED_BEAN_RESOLVER);
         composite.addPropertyELResolver(RESOURCE_RESOLVER);
@@ -264,24 +303,24 @@ public class ELUtils {
         addPropertyResolvers(composite, associate);
         composite.add(associate.getApplicationELResolvers());
     }
-    
+
     private static void checkNotNull(FacesCompositeELResolver composite, ApplicationAssociate associate) {
         if (associate == null) {
             throw new NullPointerException(
-                getExceptionMessageString(NULL_PARAMETERS_ERROR_MESSAGE_ID, "associate"));
+                    getExceptionMessageString(NULL_PARAMETERS_ERROR_MESSAGE_ID, "associate"));
         }
 
         if (composite == null) {
             throw new NullPointerException(
-                getExceptionMessageString(NULL_PARAMETERS_ERROR_MESSAGE_ID, "composite"));
+                    getExceptionMessageString(NULL_PARAMETERS_ERROR_MESSAGE_ID, "composite"));
         }
     }
-    
+
     private static boolean tryAddCDIELResolver(FacesCompositeELResolver composite) {
         FacesContext facesContext = FacesContext.getCurrentInstance();
-        
+
         javax.enterprise.inject.spi.BeanManager beanManager = getCdiBeanManager(facesContext);
-        
+
         if (beanManager == null) {
             // TODO: use version enum and >=
             if (getFacesConfigXmlVersion(facesContext).equals("2.3") || getWebXmlVersion(facesContext).equals("4.0")) {
@@ -294,17 +333,17 @@ public class ELUtils {
                 return true;
             }
         }
-        
-        return false;        
+
+        return false;
     }
-    
+
     private static void addEL3_0_Resolvers(FacesCompositeELResolver composite, ApplicationAssociate associate) {
         ExpressionFactory expressionFactory = associate.getExpressionFactory();
-        
+
         Method getStreamELResolverMethod = lookupMethod(
-            ExpressionFactory.class, 
-            "getStreamELResolver", EMPTY_CLASS_ARGS);
-        
+                ExpressionFactory.class,
+                "getStreamELResolver", EMPTY_CLASS_ARGS);
+
         if (getStreamELResolverMethod != null) {
             try {
                 ELResolver streamELResolver = (ELResolver) getStreamELResolverMethod.invoke(expressionFactory, (Object[]) null);
@@ -393,7 +432,7 @@ public class ELUtils {
      */
     @SuppressWarnings("deprecation")
     public static List<String> getExpressionsFromString(String expressionString)
-    throws ReferenceSyntaxException {
+            throws ReferenceSyntaxException {
 
         if (null == expressionString) {
             return Collections.emptyList();
@@ -402,12 +441,12 @@ public class ELUtils {
         List<String> result = new ArrayList<>();
         int i, j, len = expressionString.length(), cur = 0;
         while (cur < len &&
-             -1 != (i = expressionString.indexOf("#{", cur))) {
+                -1 != (i = expressionString.indexOf("#{", cur))) {
             if (-1 == (j = expressionString.indexOf('}', i + 2))) {
                 throw new ReferenceSyntaxException(
-                     MessageUtils.getExceptionMessageString(
-                          MessageUtils.INVALID_EXPRESSION_ID,
-                          expressionString));
+                        MessageUtils.getExceptionMessageString(
+                                MessageUtils.INVALID_EXPRESSION_ID,
+                                expressionString));
             }
             cur = j + 1;
             result.add(expressionString.substring(i, cur));
@@ -415,7 +454,7 @@ public class ELUtils {
         return result;
 
     }
-        
+
 
     /**
      * <p>This method is used by the ManagedBeanFactory to ensure that
@@ -440,7 +479,7 @@ public class ELUtils {
      */
     @SuppressWarnings("deprecation")
     public static ELUtils.Scope getScope(String valueBinding, String[] outString)
-         throws ReferenceSyntaxException {
+            throws ReferenceSyntaxException {
 
         if (valueBinding == null || 0 == valueBinding.length()) {
             return null;
@@ -526,7 +565,7 @@ public class ELUtils {
         if (appMap != null && appMap.containsKey(identifier)) {
             return Scope.APPLICATION;
         }
-       
+
         //not present in any scope
         return null;
 
@@ -542,7 +581,7 @@ public class ELUtils {
      */
     public static ValueExpression createValueExpression(String expression) {
 
-       return createValueExpression(expression, Object.class);
+        return createValueExpression(expression, Object.class);
 
     }
 
@@ -551,9 +590,9 @@ public class ELUtils {
                                                         Class<?> expectedType) {
         FacesContext context = FacesContext.getCurrentInstance();
         return context.getApplication().getExpressionFactory().
-            createValueExpression(context.getELContext(),
-                                  expression,
-                                  expectedType);
+                createValueExpression(context.getELContext(),
+                        expression,
+                        expectedType);
     }
 
 
@@ -573,12 +612,43 @@ public class ELUtils {
             }
         }
         return null;
-        
+
     }
 
 
     // --------------------------------------------------------- Private Methods
 
+
+    /**
+     * Adds the specified <code>expression</code> with its evaluation result <code>isCompositeComponent</code> to the <code>compositeComponentEvaluationCache</code>,
+     * taking into account the maximum cache size.
+     */
+    private static void rememberEvaluationResult(String expression, boolean isCompositeComponent) {
+        // validity check
+        if (compositeComponentEvaluationCacheMaxSize <= 0) {
+            return;
+        }
+
+        synchronized (compositeComponentEvaluationCache) {
+            if (compositeComponentEvaluationCache.size() >= compositeComponentEvaluationCacheMaxSize) {
+                // obtain the oldest cached element
+                String oldestExpression = evaluationCacheFifoQueue.removeFirst();
+
+                // remove the mapping for this element
+                compositeComponentEvaluationCache.remove(oldestExpression);
+            }
+
+            // add the mapping to the cache
+            if (isCompositeComponent) {
+                compositeComponentEvaluationCache.put(expression, IS_COMPOSITE_COMPONENT);
+            } else {
+                compositeComponentEvaluationCache.put(expression, IS_NOT_A_COMPOSITE_COMPONENT);
+            }
+
+            // remember the sequence of the hash map "put" operations
+            evaluationCacheFifoQueue.add(expression);
+        }
+    }
 
     /**
      * <p>Add the <code>ELResolvers</code> from the provided list
@@ -678,7 +748,7 @@ public class ELUtils {
 
     @SuppressWarnings("deprecation")
     private static String stripBracketsIfNecessary(String expression)
-    throws ReferenceSyntaxException {
+            throws ReferenceSyntaxException {
 
         assert (null != expression);
 
@@ -686,14 +756,14 @@ public class ELUtils {
         if (expression.charAt(0) == '#') {
             if (expression.charAt(1) != '{') {
                 throw new ReferenceSyntaxException(MessageUtils.getExceptionMessageString(
-                    MessageUtils.INVALID_EXPRESSION_ID,
-                    expression));
+                        MessageUtils.INVALID_EXPRESSION_ID,
+                        expression));
             }
             int len = expression.length();
             if (expression.charAt(len - 1) != '}') {
                 throw new ReferenceSyntaxException(MessageUtils.getExceptionMessageString(
-                    MessageUtils.INVALID_EXPRESSION_ID,
-                    expression));
+                        MessageUtils.INVALID_EXPRESSION_ID,
+                        expression));
             }
             expression = expression.substring(2, len - 1);
         }
@@ -716,7 +786,7 @@ public class ELUtils {
 
     @SuppressWarnings("deprecation")
     public static boolean hasValidLifespan(Scope expressionScope, Scope beanScope)
-         throws EvaluationException {
+            throws EvaluationException {
 
         //if the managed bean's scope is "none" but the scope of the
         //referenced object is not "none", scope is invalid
@@ -729,7 +799,7 @@ public class ELUtils {
         if (beanScope == Scope.REQUEST) {
             return true;
         }
-        
+
         //if the managed bean's scope is "view" it is able to refer to 
         //objects in other "view", "session", "application" or "none" scopes.
         if (beanScope == Scope.VIEW) {
@@ -740,15 +810,15 @@ public class ELUtils {
         //to objects in other "session", "application", or "none" scopes
         if (beanScope == Scope.SESSION) {
             return !(expressionScope == Scope.REQUEST
-                     || expressionScope == Scope.VIEW);
+                    || expressionScope == Scope.VIEW);
         }
 
         //if the managed bean's scope is "application" it is able to refer
         //to objects in other "application", or "none" scopes
         if (beanScope == Scope.APPLICATION) {
             return !(expressionScope == Scope.REQUEST
-                     || expressionScope == Scope.VIEW
-                     || expressionScope == Scope.SESSION);
+                    || expressionScope == Scope.VIEW
+                    || expressionScope == Scope.SESSION);
         }
 
         //the managed bean is required to be in either "request", "view",
@@ -762,7 +832,7 @@ public class ELUtils {
 
     @SuppressWarnings("deprecation")
     public static ELUtils.Scope getScopeForSingleExpression(String value)
-         throws EvaluationException {
+            throws EvaluationException {
         String[] firstSegment = new String[1];
         ELUtils.Scope valueScope = ELUtils.getScope(value, firstSegment);
 
@@ -771,7 +841,7 @@ public class ELUtils {
             // scope would be when it is created.
             if (firstSegment[0] != null) {
                 BeanManager manager =
-                     ApplicationAssociate.getCurrentInstance().getBeanManager();
+                        ApplicationAssociate.getCurrentInstance().getBeanManager();
 
                 if (manager.isManaged(firstSegment[0])) {
                     valueScope = ELUtils.getScope(manager.getBuilder(firstSegment[0]).getScope());
@@ -788,7 +858,7 @@ public class ELUtils {
 
     @SuppressWarnings("deprecation")
     public static Scope getNarrowestScopeFromExpression(String expression)
-         throws ReferenceSyntaxException {
+            throws ReferenceSyntaxException {
         // break the argument expression up into its component
         // expressions, ignoring literals.
         List<String> expressions = ELUtils.getExpressionsFromString(expression);
@@ -796,7 +866,7 @@ public class ELUtils {
         int shortestScope = Scope.NONE.ordinal();
         Scope result = Scope.NONE;
         for (String expr : expressions) {
-        // loop over the expressions
+            // loop over the expressions
 
             Scope lScope = getScopeForSingleExpression(expr);
             // don't consider none
@@ -833,12 +903,12 @@ public class ELUtils {
         }
         return false;
     }
-    
+
     /*
      * First look in the ApplicationAssociate.  If that fails, try
      * the Jsp engine.  If that fails, return null;
-    
-    */
+
+     */
     public static ExpressionFactory getDefaultExpressionFactory(FacesContext facesContext) {
         ExpressionFactory result;
         if (null == facesContext) {
@@ -848,20 +918,20 @@ public class ELUtils {
         if (null == extContext) {
             return null;
         }
-        
+
         ApplicationAssociate associate = ApplicationAssociate.getInstance(extContext);
         result = getDefaultExpressionFactory(associate, facesContext);
-        
+
         return result;
     }
 
     public static ExpressionFactory getDefaultExpressionFactory(ApplicationAssociate associate, FacesContext facesContext) {
         ExpressionFactory result = null;
-        
+
         if (null != associate) {
             result = associate.getExpressionFactory();
         }
-        
+
         if (null == result) {
             if (null == facesContext) {
                 return null;
@@ -870,7 +940,7 @@ public class ELUtils {
             if (null == extContext) {
                 return null;
             }
-            
+
             Object servletContext = extContext.getContext();
             if (null != servletContext) {
                 if (servletContext instanceof ServletContext) {
@@ -882,7 +952,7 @@ public class ELUtils {
                 }
             }
         }
-        
+
         return result;
     }
 }
